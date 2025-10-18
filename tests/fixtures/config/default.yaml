@@ -1,0 +1,93 @@
+﻿app:
+  name: sf-rdf-acl
+  env: development
+  port: 8000
+  debug: true
+
+cors:
+  origins:
+    - http://localhost:3000
+
+rdf:
+  endpoint: http://192.168.0.119:3030
+  dataset: semantic_forge_test
+  timeout:
+    default: 30
+    max: 120
+  retries:
+    max_attempts: 3
+    backoff_seconds: 0.5
+    backoff_multiplier: 2.0
+    jitter_seconds: 0.1
+  circuitBreaker:
+    failureThreshold: 5
+    recoveryTimeout: 30
+    recordTimeoutOnly: false
+  naming:
+    graph_format: "urn:sf:{model}:{version}:{env}"
+    snapshot_format: "urn:sf:{model}:{version}:{env}:snapshot:{ts}"
+
+postgres:
+  dsn: postgresql://postgres:123456@192.168.0.119:5432/semantic_forge
+  schema: rdf_acl
+  migrations_table: rdf_acl_migrations
+
+redis:
+  url: redis://:123456@192.168.0.119:6379/0
+  namespace: semanticforge
+
+qdrant:
+  http_url: http://192.168.0.119:6333
+  grpc_url: grpc://192.168.0.119:6334
+  timeout:
+    default: 30
+    max: 120
+
+logging:
+  level: INFO
+  format: json
+  json_indent: null
+
+contract:
+  envelope_version: v1
+  default_timeout: 30
+  pagination:
+    default_size: 50
+    max_size: 500
+
+security:
+  trace_header: X-Trace-Id
+  client_header: X-Client-Id
+  idempotency_header: Idempotency-Key
+  require_api_key: false
+  api_key_header: X-API-Key
+
+graph:
+  projectionProfiles:
+    default:
+      description: 默认图投影配置
+      edgePredicates:
+        - prov:wasDerivedFrom
+        - sf:relatesTo
+      nodeTypes:
+        - sf:Entity
+      includeLiterals: false
+      flattenReification: true
+      directed: true
+      weightPredicate: null
+      limit: 2000
+  algorithm:
+    allowedAlgorithms:
+      - pagerank
+      - shortest_path
+      - khop
+    maxKhops: 4
+    maxNodes: 2000
+    maxEdges: 5000
+    defaultTimeout: 30
+    maxTimeout: 120
+
+
+
+
+

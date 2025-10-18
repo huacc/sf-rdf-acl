@@ -1,0 +1,6 @@
+sf-common>=0.1.0
+pydantic==2.5.0
+rdflib==7.0.0
+SPARQLWrapper==2.0.0
+httpx<1.0,>=0.26
+python-dotenv<2.0,>=1.0

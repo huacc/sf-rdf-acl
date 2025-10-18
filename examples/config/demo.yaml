@@ -1,0 +1,37 @@
+﻿rdf:
+  endpoint: http://192.168.0.119:3030
+  dataset: semantic_forge_test
+  auth:
+    username: ""
+    password: ""
+  timeout:
+    default: 30
+    max: 120
+  retries:
+    max_attempts: 3
+    backoff_seconds: 0.5
+    backoff_multiplier: 2.0
+    jitter_seconds: 0.1
+  circuitBreaker:
+    failureThreshold: 5
+    recoveryTimeout: 30.0
+    recordTimeoutOnly: false
+
+graph:
+  projectionProfiles:
+    default:
+      edgePredicates:
+        - sf:relatesTo
+      nodeTypes:
+        - http://semanticforge.ai/ontologies/core#Entity
+      includeLiterals: true
+      flattenReification: true
+      directed: true
+      limit: 100
+
+postgres:
+  dsn: postgresql://postgres:123456@192.168.0.119:5432/semantic_forge
+  schema: rdf_acl
+
+
+

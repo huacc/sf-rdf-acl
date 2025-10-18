@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sf-rdf-acl"
+version = "0.1.0"
+description = "SemanticForge RDF Anti-Corruption Layer (library)"
+readme = "README.md"
+requires-python = ">=3.12"
+license = {text = "Proprietary"}
+authors = [{ name = "SemanticForge Team" }]
+dependencies = [
+  "sf-common>=0.1.0",
+  "pydantic==2.5.0",
+  "rdflib==7.0.0",
+  "SPARQLWrapper==2.0.0",
+  "httpx>=0.26,<1.0",
+  "python-dotenv>=1.0,<2.0",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = [
+  "sf_rdf_acl",
+  "sf_rdf_acl.connection",
+  "sf_rdf_acl.query",
+  "sf_rdf_acl.transaction",
+  "sf_rdf_acl.converter",
+  "sf_rdf_acl.graph",
+  "sf_rdf_acl.provenance",
+  "sf_rdf_acl.utils"
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+
+
