@@ -298,7 +298,9 @@ class NamedGraphManager:
 
         if ':' not in value:
             return False
-        prefix = value.split(':', 1)[0]
+        prefix, rest = value.split(':', 1)
+        if rest.startswith('//'):
+            return False
         return prefix.isidentifier()
 
     @staticmethod

@@ -35,5 +35,5 @@ packages = [
 [tool.pytest.ini_options]
 addopts = "-ra"
 testpaths = ["tests"]
-
+norecursedirs = ["legacy"]
 
