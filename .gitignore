@@ -6,6 +6,7 @@ __pycache__/
 
 # Virtual env
 .venv/
+.venv_e2e/
 
 # Test & Coverage
 .pytest_cache/
