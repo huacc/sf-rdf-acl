@@ -230,13 +230,17 @@ class GraphProjectionBuilder:
         response = await self._client.select(query, trace_id=trace_id)
         stats = response.get("stats", {})
         bindings = response.get("bindings", [])
-        return self._build_graphjson(
+        graph_json, edgelist, stats, graph_iri = self._build_graphjson(
             bindings=bindings,
             directed=profile.get("directed", True),
             flatten_reification=profile.get("flattenReification", True),
             graph_iri=graph_iri,
             stats=stats,
         )
+        # 若要求不包含字面量，结果层面再过滤一次，避免上游桩绕过查询过滤
+        if not profile.get("includeLiterals", False):
+            graph_json["edges"] = [e for e in graph_json.get("edges", []) if e.get("target") is not None]
+        return graph_json, edgelist, stats, graph_iri
 
     def _merge_profile(self, profile_name: str, override: dict[str, Any] | None) -> dict[str, Any]:
         """合并 profile 默认配置与覆盖参数。
@@ -254,6 +258,15 @@ class GraphProjectionBuilder:
             raise APIError(ErrorCode.BAD_REQUEST, f"未找到投影配置：{profile_name}")
         merged = profiles[profile_name].model_dump(by_alias=True)
         if override:
+            # 若 profile 指定了最大 limit，则运行时覆盖必须严格小于该上限
+            if "limit" in override and merged.get("limit") is not None:
+                try:
+                    o = int(override.get("limit"))
+                    p = int(merged.get("limit"))
+                    if o >= p:
+                        raise APIError(ErrorCode.BAD_REQUEST, "Limit override violates profile bound")
+                except Exception:
+                    raise APIError(ErrorCode.BAD_REQUEST, "Invalid limit override")
             merged.update(override)
         return merged
 
