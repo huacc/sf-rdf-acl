@@ -1,21 +1,26 @@
-﻿浜嬪姟锛圱ransaction锛?===================
+事务（Transaction）
+===================
 
-姒傝
+概览
 ----
 
-浜嬪姟鐩稿叧妯″潡鍖呭惈涓夐儴鍒嗭細
+事务相关模块包含四部分：
 
-- Upsert 瑙勫垝涓庡缓妯★紙`upsert`锛夛細`Triple/Provenance/UpsertRequest/UpsertPlanner/UpsertPlan/UpsertStatement`
-- 浜嬪姟鎵ц绠＄悊锛坄manager`锛夛細`TransactionManager.upsert` 鎵ц璁″垝銆佸啿绐佹鏌ャ€佸洖婊氫繚鎶や笌瀹¤
-- 鎵瑰鐞嗗啓鍏ワ紙`batch`锛夛細`BatchOperator.apply_template` 鐢ㄦā鏉垮寲鏂瑰紡楂樺悶鍚愬啓鍏?- 瀹¤鏃ュ織锛坄audit`锛夛細`AuditLogger` 璁板綍鎿嶄綔涓庤姹傛棩蹇楋紙鍙€夛級
+- Upsert 规划与建模（`upsert`）：`Triple/Provenance/UpsertRequest/UpsertPlanner/UpsertPlan/UpsertStatement`
+- 事务执行管理（`manager`）：`TransactionManager.upsert` 执行计划、冲突检查、回滚保护与审计
+- 批处理写入（`batch`）：`BatchOperator.apply_template` 用模板化方式高吞吐写入
+- 审计日志（`audit`）：`AuditLogger` 记录操作与请求日志（可选）
 
 
-Upsert 寤烘ā涓庤鍒掞紙upsert锛?---------------------------
+Upsert 建模与规划（upsert）
+---------------------------
 
-涓昏绫诲瀷
+主要类型
 ~~~~~~~~
 
-- `Triple(s: str, p: str, o: str, lang: str | None = None, dtype: str | None = None)`锛氫笁鍏冪粍锛屾敮鎸佽瑷€鎴栨暟鎹被鍨?- `Provenance(evidence: str | None = None, confidence: float | None = None, source: str | None = None)`锛氭函婧愪俊鎭?- `UpsertRequest(graph: GraphRef, triples: list[Triple], upsert_key: Literal["s","s+p","custom"] = "s", custom_key_fields: list[str] | None = None, merge_strategy: Literal["replace","ignore","append"] = "replace", provenance: Provenance | None = None)`
+- `Triple(s: str, p: str, o: str, lang: str | None = None, dtype: str | None = None)`：三元组，支持语言或数据类型
+- `Provenance(evidence: str | None = None, confidence: float | None = None, source: str | None = None)`：溯源信息
+- `UpsertRequest(graph: GraphRef, triples: list[Triple], upsert_key: Literal["s","s+p","custom"] = "s", custom_key_fields: list[str] | None = None, merge_strategy: Literal["replace","ignore","append"] = "replace", provenance: Provenance | None = None)`
 - `UpsertStatement(sparql: str, key: str, strategy: Literal["replace","ignore","append"], triples: list[Triple], requires_snapshot: bool)`
 - `UpsertPlan(graph_iri: str, statements: list[UpsertStatement], request_hash: str)`
 
@@ -23,11 +28,13 @@ UpsertPlanner
 ~~~~~~~~~~~~~
 
 - `plan(request: UpsertRequest) -> UpsertPlan`
-  - 鎸?`upsert_key` 鍒嗙粍骞朵緷 `merge_strategy` 鐢熸垚 UPDATE 璇彞锛?    - `replace`锛氭瀯閫?DELETE/INSERT锛屼互 key 鑼冨洿鍐呯殑鐩爣鍊兼暣浣撴浛鎹?    - `ignore`锛氫粎鍦ㄤ笉瀛樺湪瀹屽叏鐩稿悓涓夊厓缁勬椂鎻掑叆
-    - `append`锛氱洿鎺ヨ拷鍔?INSERT
-  - 杩斿洖锛氬寘鍚鍙ラ泦鍚堜笌璇锋眰鍝堝笇锛堢敤浜庡璁″幓閲嶏級
+  - 按 `upsert_key` 分组并依 `merge_strategy` 生成 UPDATE 语句：
+    - `replace`：构造 DELETE/INSERT，以 key 范围内的目标值整体替换
+    - `ignore`：仅在不存在完全相同三元组时插入
+    - `append`：直接追加 INSERT
+  - 返回：包含语句集合与请求哈希（用于审计去重）
 
-绀轰緥
+示例
 ~~~~
 
 .. code-block:: python
@@ -46,19 +53,20 @@ UpsertPlanner
        print(st.strategy, st.sparql[:80])
 
 
-浜嬪姟鎵ц绠＄悊锛坢anager锛?----------------------
+事务执行管理（manager）
+----------------------
 
 TransactionManager
 ~~~~~~~~~~~~~~~~~~
 
-- `begin() -> str`锛氬紑濮嬩簨鍔★紝杩斿洖浜嬪姟 ID
-- `commit(tx_id: str) -> None`锛氭彁浜わ紙褰撳墠瀹炵幇涓虹┖鎿嶄綔锛岄鐣欐墿灞曪級
-- `rollback(tx_id: str) -> None`锛氬洖婊氾紙褰撳墠瀹炵幇涓虹┖鎿嶄綔锛岄鐣欐墿灞曪級
+- `begin() -> str`：开始事务，返回事务 ID
+- `commit(tx_id: str) -> None`：提交（当前实现为空操作，预留扩展）
+- `rollback(tx_id: str) -> None`：回滚（当前实现为空操作，预留扩展）
 - `upsert(request: UpsertRequest, *, trace_id: str, actor: str | None = None) -> dict`
-  - 浣滅敤锛氭墽琛?Upsert 璁″垝锛涘 `ignore` 绛栫暐鍋氶噸澶嶆鏌ワ紱蹇呰鏃舵瀯寤哄洖婊氬揩鐓э紱鏀寔瀹¤鍐欏叆
-  - 杩斿洖锛?    `{"graph": iri, "applied": N, "statements": K, "conflicts": [..], "txId": id, "durationMs": ms, "auditId": id_or_none}`
+  - 作用：执行 Upsert 计划；对 `ignore` 策略做重复检查；必要时构建回滚快照；支持审计写入
+  - 返回：`{"graph": iri, "applied": N, "statements": K, "conflicts": [..], "txId": id, "durationMs": ms, "auditId": id_or_none}`
 
-绀轰緥
+示例
 ~~~~
 
 .. code-block:: python
@@ -70,7 +78,7 @@ TransactionManager
    mgr = TransactionManager()
    req = UpsertRequest(
        graph=GraphRef(model="demo", version="v1", env="dev"),
-       triples=[Triple(s="<http://ex/e/1>", p="rdfs:label", o="绀轰緥", lang="zh")],
+       triples=[Triple(s="<http://ex/e/1>", p="rdfs:label", o="示例", lang="zh")],
        upsert_key="s+p",
        merge_strategy="ignore",
    )
@@ -78,22 +86,24 @@ TransactionManager
    print(summary["applied"], len(summary["conflicts"]))
 
 
-鎵瑰鐞嗗啓鍏ワ紙batch锛?-------------------
+批处理写入（batch）
+-------------------
 
 BatchOperator
 ~~~~~~~~~~~~~
 
-- 鏋勯€狅細`BatchOperator(client: RDFClient, batch_size: int = 1000, max_retries: int = 3)`
+- 构造：`BatchOperator(client: RDFClient, batch_size: int = 1000, max_retries: int = 3)`
 - `apply_template(template: BatchTemplate, graph_iri: str, *, trace_id: str, dry_run: bool = False) -> BatchResult`
   - `BatchTemplate(pattern: str, bindings: list[dict[str, str]])`
   - `BatchResult(total: int, success: int, failed: int, failed_items: list[dict], duration_ms: float)`
 
-绀轰緥
+示例
 ~~~~
 
 .. code-block:: python
 
    from sf_rdf_acl.transaction.batch import BatchOperator, BatchTemplate
+   from sf_rdf_acl.connection.client import FusekiClient
 
    template = BatchTemplate(
        pattern="{?s} <http://ex/p> {?o} .",
@@ -103,24 +113,27 @@ BatchOperator
        ],
    )
 
-   # client 鍙鐢?FusekiClient
-from sf_rdf_acl.connection.client import FusekiClient
+   # client 可复用 FusekiClient
    client = FusekiClient(endpoint="http://127.0.0.1:3030", dataset="acl")
    op = BatchOperator(client, batch_size=1000)
    result = await op.apply_template(template, "http://ex/graph/demo", trace_id="t-batch-1")
    print(result.success, result.failed)
 
 
-瀹¤鏃ュ織锛坅udit锛?-----------------
+审计日志（audit）
+-----------------
 
-AuditLogger锛堝彲閫夎兘鍔涳級
+AuditLogger（可选能力）
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-- 鏋勯€狅細`AuditLogger(dsn: str, schema: str)`锛堝唴閮ㄤ娇鐢?SQLAlchemy Engine锛?- `log_operation_async(...) -> str | None`锛氬啓鍏?`rdf_operation_audit`锛岃繑鍥炶褰?ID
-- `log_operation(...) -> str | None`锛氬悓姝ュ啓鍏?- `log_request_async(...) -> None`锛氬啓鍏?`request_log`
-- `log_request(...) -> None`锛氬悓姝ュ啓鍏?
+- 构造：`AuditLogger(dsn: str, schema: str)`（内部使用 SQLAlchemy Engine）
+- `log_operation_async(...) -> str | None`：写入 `rdf_operation_audit`，返回记录 ID
+- `log_operation(...) -> str | None`：同步写入
+- `log_request_async(...) -> None`：写入 `request_log`
+- `log_request(...) -> None`：同步写入
 
-鑷姩鏂囨。锛堝弬鑰冿級
+
+自动文档（参考）
 ----------------
 
 .. automodule:: sf_rdf_acl.transaction.manager
