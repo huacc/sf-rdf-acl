@@ -290,7 +290,20 @@ class SPARQLQueryBuilder:
 
         query_parts = [header, head, "WHERE {", body, "}"]
 
-        order_clause = self._render_order_clause(dsl, select_vars)
+        # 聚合查询通常按 GROUP BY 字段或聚合结果排序；为避免无效的 ?s 排序导致 400，
+        # 当存在聚合时仅在 DSL 显式给出 sort 时再渲染 ORDER BY，并且不追加稳定排序 ?s。
+        order_clause = ""
+        if not construct and not getattr(dsl, "aggregations", None):
+            order_clause = self._render_order_clause(dsl, select_vars)
+        elif not construct and getattr(dsl, "aggregations", None) and dsl.sort:
+            order_spec = dsl.sort or {}
+            order_field = str(order_spec.get("by", "")).strip()
+            if order_field:
+                if not order_field.startswith("?"):
+                    order_field = f"?{order_field}"
+                direction = (order_spec.get("order", "asc") or "asc").lower()
+                func = "DESC" if direction == "desc" else "ASC"
+                order_clause = f"ORDER BY {func}({order_field})"
         if order_clause:
             query_parts.append(order_clause)
         # GROUP BY / HAVING（仅当存在聚合定义时生成）

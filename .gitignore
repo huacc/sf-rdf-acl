@@ -1,0 +1,27 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual env
+.venv/
+
+# Test & Coverage
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Build outputs
+build/
+dist/
+*.egg-info/
+
+# Local outputs
+out/
+out_print_query.py
+
+# Sphinx build cache
+.docs_cache/
+
