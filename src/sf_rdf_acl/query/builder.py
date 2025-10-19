@@ -6,7 +6,82 @@ import re
 from datetime import datetime
 from typing import Any, Iterable, Sequence
 
-from .dsl import Filter, QueryDSL, TimeWindow
+from .dsl import Aggregation, Filter, GroupBy, QueryDSL, TimeWindow
+
+
+class SPARQLSanitizer:
+    """SPARQL 参数安全转义工具。
+
+    提供 IRI 校验、字符串字面量转义，以及前缀名合法性校验，尽量在构建查询
+    的早期阶段发现并阻断潜在的注入或格式风险。
+
+    注意：该工具仅负责语法级别的安全防护，不等价于权限与数据级安全控制。
+    """
+
+    @staticmethod
+    def escape_uri(uri: str) -> str:
+        """转义并校验 IRI。
+
+        参数：
+            uri: 原始 IRI 字符串。必须是非空字符串，推荐以 http/https 开头。
+
+        返回：
+            通过校验的 IRI 字符串（原样返回，不包角括号）。
+
+        异常：
+            ValueError: 当 IRI 为空、类型错误、或包含危险字符时抛出。
+        """
+
+        if not uri or not isinstance(uri, str):
+            raise ValueError(f"Invalid URI: {uri}")
+
+        # 要求 http/https IRI，其他协议或裸字符串一律拒绝
+        if not (uri.startswith("http://") or uri.startswith("https://")):
+            raise ValueError(f"Invalid URI scheme: {uri}")
+
+        # 拦截常见危险字符，避免拼接破坏 SPARQL 结构
+        dangerous_chars = ["<", ">", '"', "{", "}", "|", "\\", "^", "`"]
+        if any(ch in uri for ch in dangerous_chars):
+            raise ValueError(f"URI contains dangerous characters: {uri}")
+
+        return uri
+
+    @staticmethod
+    def escape_literal(value: str, datatype: str | None = None) -> str:
+        """转义字面量为安全的 SPARQL 表达式。
+
+        参数：
+            value: 原始字符串字面量。
+            datatype: 可选的数据类型 IRI（不带尖括号）。
+
+        返回：
+            转义后的 SPARQL 字面量表达式，例如：
+            - 普通字符串："hello"
+            - 带类型："2024-01-01"^^<http://www.w3.org/2001/XMLSchema#date>
+        """
+
+        # 仅进行必要转义：反斜杠与双引号
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        if datatype:
+            return f'"{escaped}"^^<{datatype}>'
+        return f'"{escaped}"'
+
+    @staticmethod
+    def validate_prefix(prefix: str) -> bool:
+        """验证前缀名称是否合法。
+
+        参数：
+            prefix: 前缀名（需满足 XML NCName 约束）。
+
+        返回：
+            True 表示合法，False 表示不合法。
+        """
+
+        import re as _re
+
+        # XML NCName 的近似校验：首字符字母或下划线，后续为字母/数字/下划线/连字符
+        pattern = r"^[A-Za-z_][A-Za-z0-9_-]*$"
+        return bool(_re.match(pattern, prefix))
 
 
 class SPARQLQueryBuilder:
@@ -136,19 +211,133 @@ class SPARQLQueryBuilder:
         if construct:
             head = "CONSTRUCT {\n  ?s ?p ?o .\n}"
         else:
-            head = f"SELECT DISTINCT {' '.join(select_vars)}"
+            # 若存在聚合定义，则 SELECT 由聚合表达式与分组变量组成
+            if hasattr(dsl, "aggregations") and dsl.aggregations:
+                agg_exprs = [self._build_aggregation_clause(a) for a in dsl.aggregations]
+                group_vars: list[str] = []
+                if hasattr(dsl, "group_by") and dsl.group_by:
+                    group_vars = [self._normalize_var(v) for v in (dsl.group_by.variables or [])]
+                head = f"SELECT {' '.join([*agg_exprs, *group_vars])}".rstrip()
+            else:
+                head = f"SELECT DISTINCT {' '.join(select_vars)}"
 
         query_parts = [header, head, "WHERE {", body, "}"]
 
         order_clause = self._render_order_clause(dsl, select_vars)
         if order_clause:
             query_parts.append(order_clause)
+        # GROUP BY / HAVING（仅当存在聚合定义时生成）
+        if not construct and hasattr(dsl, "group_by") and dsl.group_by:
+            query_parts.append(self._build_group_by_clause(dsl.group_by))
+        if not construct and hasattr(dsl, "having") and dsl.having:
+            query_parts.append(self._build_having_clause(dsl.having))
+
         query_parts.append(self._render_limit_clause(dsl))
         offset_clause = self._render_offset_clause(dsl)
         if offset_clause:
             query_parts.append(offset_clause)
 
         return "\n".join(part for part in query_parts if part)
+
+    # -------------------- 聚合 / HAVING 支持 --------------------
+
+    def _build_aggregation_clause(self, agg: Aggregation) -> str:
+        """构建单个聚合表达式。
+
+        参数：
+            agg: 聚合定义对象。
+
+        返回：
+            可直接出现在 SELECT 子句中的聚合表达式，例如
+            "(COUNT(?s) AS ?cnt)" 或 "GROUP_CONCAT(DISTINCT ?label; SEPARATOR=\", \")"
+        """
+
+        func = agg.function
+        var = self._normalize_var(agg.variable)
+
+        if func == "GROUP_CONCAT":
+            distinct_kw = "DISTINCT " if getattr(agg, "distinct", False) else ""
+            if getattr(agg, "separator", None) is not None:
+                sep = SPARQLSanitizer.escape_literal(agg.separator)  # type: ignore[arg-type]
+                expr = f"GROUP_CONCAT({distinct_kw}{var}; SEPARATOR={sep})"
+            else:
+                expr = f"GROUP_CONCAT({distinct_kw}{var})"
+        else:
+            inner = f"{func}({var})"
+            if getattr(agg, "distinct", False):
+                inner = f"{func}(DISTINCT {var})"
+            expr = inner
+
+        if getattr(agg, "alias", None):
+            alias = self._normalize_var(agg.alias or "")
+            expr = f"({expr} AS {alias})"
+        return expr
+
+    def _build_group_by_clause(self, group_by: GroupBy) -> str:
+        """构建 GROUP BY 子句。"""
+
+        if not group_by or not group_by.variables:
+            return ""
+        vars_str = " ".join(self._normalize_var(v) for v in group_by.variables)
+        return f"GROUP BY {vars_str}"
+
+    def _build_having_clause(self, having: list[Filter]) -> str:
+        """构建 HAVING 子句，复用过滤构建逻辑但针对聚合上下文。"""
+
+        if not having:
+            return ""
+        conditions: list[str] = []
+        for f in having:
+            field = self._normalize_var(str(f.field))
+            op = str(getattr(f, "op"))
+            if op in {"=", "!=", ">", ">=", "<", "<="}:
+                conditions.append(f"{field} {op} {self._escape_filter_value(f.value)}")
+            elif op == "in":
+                values = ", ".join(self._escape_filter_value(v) for v in self._to_iterable(f.value))
+                conditions.append(f"{field} IN ({values})")
+            elif op == "range":
+                lower, upper = self._split_range(f.value)
+                parts: list[str] = []
+                if lower is not None:
+                    parts.append(f"{field} >= {self._escape_filter_value(lower)}")
+                if upper is not None:
+                    parts.append(f"{field} <= {self._escape_filter_value(upper)}")
+                if parts:
+                    conditions.append(" && ".join(parts))
+            elif op == "contains":
+                val = self._escape_string(str(f.value))
+                conditions.append(f"CONTAINS(LCASE(STR({field})), LCASE(\"{val}\"))")
+            elif op == "regex":
+                pat = self._escape_string(str(f.value))
+                conditions.append(f"REGEX(STR({field}), \"{pat}\", \"i\")")
+            elif op == "exists":
+                conditions.append(f"BOUND({field})")
+            elif op == "isNull":
+                conditions.append(f"!BOUND({field})")
+            else:
+                raise ValueError(f"不支持的 HAVING 操作符: {op}")
+
+        return f"HAVING {' && '.join(conditions)}"
+
+    def _escape_filter_value(self, value: Any) -> str:
+        """安全转义 HAVING/过滤中使用的值。"""
+
+        if isinstance(value, str):
+            if value.startswith("http://") or value.startswith("https://"):
+                return f"<{SPARQLSanitizer.escape_uri(value)}>"
+            return SPARQLSanitizer.escape_literal(value)
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return str(value)
+        raise ValueError(f"Unsupported filter value type: {type(value)}")
+
+    @staticmethod
+    def _normalize_var(var: str) -> str:
+        """规范化变量名，确保以“?”作为前缀。"""
+
+        v = var.strip()
+        return v if v.startswith("?") else f"?{v}"
 
     def _merge_prefixes(self, dsl: QueryDSL) -> dict[str, str]:
         """
@@ -163,6 +352,10 @@ class SPARQLQueryBuilder:
 
         prefixes = {**self._default_prefixes}
         if dsl.prefixes:
+            for pfx, iri in dsl.prefixes.items():
+                if not SPARQLSanitizer.validate_prefix(pfx):
+                    raise ValueError(f"Invalid prefix name: {pfx}")
+                SPARQLSanitizer.escape_uri(iri)
             prefixes.update(dsl.prefixes)
         return prefixes
 

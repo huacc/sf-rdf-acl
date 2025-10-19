@@ -1,78 +1,83 @@
-﻿"""查询 DSL 数据模型定义，供 SPARQL 构建器与后端服务共用。"""
+"""查询 DSL 数据模型，服务于 SPARQL 构建与校验。
+
+本模块采用 Pydantic v2 模型与标准 dataclass 混合的方式描述：
+- Page/TimeWindow/Filter/QueryDSL/GraphRef/SPARQLRequest 使用 Pydantic；
+- Aggregation/GroupBy 使用 dataclass，便于在 DSL 中自然表达聚合与分组定义。
+"""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class Page(BaseModel):
-    """
-    分页参数配置。
+    """分页参数配置。
 
-    属性:
-        size: 每页条数，例如 100，允许范围 1~1000。
-        offset: 结果偏移量，例如 0 表示第一页，需大于等于 0。
+    参数：
+        size: 每页大小，范围 1~1000，默认 100；
+        offset: 偏移量，None 或 0 表示第一页。
     """
 
-    size: int = Field(
-        ge=1,
-        le=1000,
-        default=100,
-        description="每页条数，例如 100，允许范围 1~1000",
-    )
-    offset: int | None = Field(
-        default=None,
-        ge=0,
-        description="偏移量，例如 0 表示第一页，需大于等于 0",
-    )
+    size: int = Field(ge=1, le=1000, default=100, description="每页大小，范围 1~1000")
+    offset: int | None = Field(default=None, ge=0, description="偏移量，None 或 0 表示第一页")
 
 
 class TimeWindow(BaseModel):
-    """
-    时间窗口过滤条件。
-
-    属性:
-        gte: 起始时间，例如 datetime(2024, 1, 1, 0, 0, 0)。
-        lte: 结束时间，例如 datetime(2024, 1, 31, 23, 59, 59)。
-    """
+    """时间窗过滤配置。"""
 
     gte: datetime | None = None
     lte: datetime | None = None
 
 
 class Filter(BaseModel):
-    """
-    字段过滤条件定义。
+    """字段过滤条件。
 
-    属性:
-        field: 谓词标识，例如 "sf:name" 或 "http://example.org/name"。
-        op: 操作符，可选 "=", "!=", "in", "range", "contains", "regex", "exists", "isNull"。
-        value: 过滤值，示例 "Alice"、["Alice", "Bob"]、{"gte": 1, "lte": 10}。
+    参数：
+        field: 谓词或变量名，如 "sf:name" 或 "?cnt"；
+        op/operator: 过滤操作符，含 =, !=, >, >=, <, <=, in, range, contains, regex, exists, isNull；
+        value: 过滤值，类型随 op 变化。
     """
+
+    model_config = ConfigDict(populate_by_name=True)
 
     field: str
-    op: Literal["=", "!=", "in", "range", "contains", "regex", "exists", "isNull"]
+    op: Literal["=", "!=", ">", ">=", "<", "<=", "in", "range", "contains", "regex", "exists", "isNull"] = Field(
+        alias="operator"
+    )
     value: Any
 
 
-class QueryDSL(BaseModel):
-    """
-    查询 DSL 主体信息。
+@dataclass(frozen=True, slots=True)
+class Aggregation:
+    """聚合查询定义。
 
-    属性:
-        type: 查询类型，可选 "entity"、"relation"、"event"、"raw"。
-        filters: Filter 列表，例如 [Filter(field="sf:name", op="=", value="Alice")]。
-        expand: 展开字段列表，例如 ["sf:hasActor as actor"]。
-        time_window: 时间窗口设置，例如 TimeWindow(gte=datetime(2024, 1, 1))。
-        participants: 参与者筛选列表，例如 ["sf:Agent/Alice"]。
-        scenario_id: 场景标识，例如 "scenario-001"，可为空。
-        include_subgraph: 是否返回相关子图，示例 False。
-        page: 分页配置，例如 Page(size=50, offset=0)。
-        sort: 排序配置字典，例如 {"by": "__time", "order": "desc"}。
-        prefixes: 自定义前缀映射，例如 {"ex": "http://example.org/"}。
+    属性说明：
+        - function: COUNT/SUM/AVG/MIN/MAX/GROUP_CONCAT；
+        - variable: 参与聚合的变量名（如 "?s"）；
+        - alias: 结果别名（如 "?cnt"）；
+        - distinct: 是否对聚合变量去重；
+        - separator: GROUP_CONCAT 的分隔符。
     """
+
+    function: Literal["COUNT", "SUM", "AVG", "MIN", "MAX", "GROUP_CONCAT"]
+    variable: str
+    alias: str | None = None
+    distinct: bool = False
+    separator: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class GroupBy:
+    """分组定义。"""
+
+    variables: list[str]
+
+
+class QueryDSL(BaseModel):
+    """查询 DSL 根模型。"""
 
     type: Literal["entity", "relation", "event", "raw"]
     filters: list[Filter] = Field(default_factory=list)
@@ -84,19 +89,14 @@ class QueryDSL(BaseModel):
     page: Page = Page()
     sort: dict | None = None
     prefixes: dict[str, str] | None = None
+    # 聚合能力（P0）
+    aggregations: list[Aggregation] | None = None
+    group_by: GroupBy | None = None
+    having: list[Filter] | None = None
 
 
 class GraphRef(BaseModel):
-    """
-    命名图引用描述。
-
-    属性:
-        name: 图名称，例如 "default"。
-        model: 模型名称，例如 "sf-core"。
-        version: 模型版本，例如 "v1.2.3"。
-        env: 部署环境，可选 "dev"、"test"、"prod"。
-        scenario_id: 场景标识，例如 "scenario-001"。
-    """
+    """命名图引用。"""
 
     name: str | None = None
     model: str | None = None
@@ -106,15 +106,9 @@ class GraphRef(BaseModel):
 
 
 class SPARQLRequest(BaseModel):
-    """
-    原生 SPARQL 请求模型。
-
-    属性:
-        sparql: 查询文本，例如 "SELECT * WHERE { ?s ?p ?o }"。
-        type: 查询类型，可选 "select" 或 "construct"。
-        timeout: 超时秒数，例如 30，允许范围 1~600。
-    """
+    """原始 SPARQL 请求模型。"""
 
     sparql: str
     type: Literal["select", "construct"] = "select"
     timeout: int | None = Field(default=30, ge=1, le=600)
+
