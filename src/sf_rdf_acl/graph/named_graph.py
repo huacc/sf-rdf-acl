@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Optional
 
@@ -151,7 +152,192 @@ class NamedGraphManager:
         await self._client.update(f"COPY GRAPH <{graph_iri}> TO GRAPH <{snapshot_iri}>", trace_id=trace_id)
         return {"graph": graph_iri, "snapshotId": snapshot_id, "snapshotGraph": snapshot_iri}
 
+    # ================= P0 条件清理（新版接口） ======================
+
+    async def conditional_clear(
+        self,
+        graph: GraphRef,
+        condition: "ClearCondition | None" = None,
+        *,
+        dry_run: bool = True,
+        trace_id: str,
+        max_deletes: int = 10000,
+        filters: dict[str, Any] | None = None,
+    ) -> "DryRunResult | dict[str, Any]":
+        """条件清理命名图。
+
+        函数功能：
+            - 按给定的三元组模式与过滤选项，预估或执行删除命名图内的数据；
+            - 支持 Dry-Run（仅统计、采样）与 max_deletes 删除上限保护，防止误删；
+            - 向下兼容旧版 ``filters={...}`` 用法，自动转换为 :class:`ClearCondition`。
+
+        参数：
+            graph: 命名图引用，必须可解析为合法的命名图 IRI；
+            condition: 条件定义，包含三元组模式与过滤器（可为空，空时等价匹配全部）;
+            dry_run: 是否仅预览，True 为预览（默认），False 为执行删除；
+            trace_id: 追踪 ID，用于链路追踪与日志定位；
+            max_deletes: 删除上限阈值，仅当 dry_run=False 时生效；
+            filters: 兼容参数，形如 {"subject": iri, "predicate": iri, "object": ...}。
+
+        返回：
+            - dry_run=True: 返回 :class:`DryRunResult`，包含估算数量、样本与耗时估算；
+            - dry_run=False: 返回 dict，包含 graph、deleted_count、execution_time_ms。
+        """
+
+        graph_iri = self._resolve_graph(graph)
+
+        cond = condition or self._condition_from_filters(filters or {})
+        delete_clause, where_clause = self._build_conditional_delete(cond, graph_iri)
+
+        if dry_run:
+            return await self._estimate_conditional_delete(graph_iri, where_clause, trace_id)
+
+        # 执行删除前，先做一次估算并检查上限
+        dry_result = await self._estimate_conditional_delete(graph_iri, where_clause, trace_id)
+        if dry_result.estimated_deletes > max_deletes:
+            raise ValueError(
+                f"Estimated deletes ({dry_result.estimated_deletes}) exceeds max_deletes ({max_deletes})"
+            )
+
+        update_query = f"{delete_clause}\n{where_clause}"
+        result = await self._client.update(update_query, trace_id=trace_id)
+        return {
+            "graph": graph_iri,
+            "deleted_count": dry_result.estimated_deletes,
+            "execution_time_ms": (result or {}).get("durationMs", 0),
+            "executed": True,
+        }
+
+
     # ---- 内部工具方法 -----------------------------------------------------
+    # =============== P0 条件清理：核心构建与估算 =================
+
+    def _condition_from_filters(self, filters: dict[str, Any]) -> "ClearCondition":
+        """将旧版 filters 字典转换为 :class:`ClearCondition`。
+
+        参数：
+            filters: 旧版过滤器，支持键 subject/predicate/object 或 s/p/o。
+
+        返回：
+            ClearCondition 实例；如果均为空则匹配任意三元组。
+        """
+
+        s = filters.get("subject") or filters.get("s")
+        p = filters.get("predicate") or filters.get("p")
+        o = filters.get("object") or filters.get("o")
+
+        def _wrap_subject(term: Any | None) -> str | None:
+            if term is None:
+                return None
+            text = str(term).strip()
+            if text.startswith("?") or text.startswith("<"):
+                return text
+            return f"<{text}>"
+
+        def _wrap_pred(term: Any | None) -> str | None:
+            if term is None:
+                return None
+            text = str(term).strip()
+            if text.startswith("?") or text.startswith("<") or ":" in text:
+                return text
+            return f"<{text}>"
+
+        def _wrap_object(term: Any | None) -> str | None:
+            if term is None:
+                return None
+            if isinstance(term, dict):
+                # 简化支持：{type: iri|literal, value: str, datatype?, lang?}
+                t = (term.get("type") or term.get("kind") or "").lower()
+                v = str(term.get("value"))
+                if t in {"iri", "uri"}:
+                    return v if v.startswith("<") else f"<{v}>"
+                if t == "literal":
+                    dt = term.get("datatype")
+                    lang = term.get("lang") or term.get("language")
+                    esc = self._escape_literal(v)
+                    if dt:
+                        return f'"{esc}"^^<{dt}>'
+                    if lang:
+                        return f'"{esc}"@{lang}'
+                    return f'"{esc}"'
+            # 字符串：尝试按 IRI 处理，否则按字面量处理
+            text = str(term).strip()
+            if text.startswith("?"):
+                return text
+            if text.startswith("http://") or text.startswith("https://") or text.startswith("<"):
+                return text if text.startswith("<") else f"<{text}>"
+            esc = self._escape_literal(text)
+            return f'"{esc}"'
+
+        return ClearCondition(patterns=[
+            TriplePattern(subject=_wrap_subject(s), predicate=_wrap_pred(p), object=_wrap_object(o))
+        ])
+
+    def _build_conditional_delete(self, condition: "ClearCondition", graph_iri: str) -> tuple[str, str]:
+        """构建条件删除的 DELETE 与 WHERE 子句。"""
+
+        # WHERE 子句：基础三元组模式
+        where_parts: list[str] = []
+        for pattern in condition.patterns:
+            where_parts.append(pattern.to_sparql())
+
+        # 过滤器：主语前缀 / 谓词白名单 / 对象类型
+        filters_list: list[str] = []
+        if getattr(condition, "subject_prefix", None):
+            prefix = self._escape_literal(condition.subject_prefix)
+            filters_list.append(f'FILTER(STRSTARTS(STR(?s), "{prefix}"))'.replace('\\"', '"'))
+        if getattr(condition, "predicate_whitelist", None):
+            pred_values = " ".join(
+                (p if p.startswith("<") or ":" in p else f"<{p}>") for p in (condition.predicate_whitelist or [])
+            )
+            filters_list.append(f"FILTER(?p IN ({pred_values}))")
+        if getattr(condition, "object_type", None):
+            if condition.object_type == "IRI":
+                filters_list.append("FILTER(isIRI(?o))")
+            elif condition.object_type == "Literal":
+                filters_list.append("FILTER(isLiteral(?o))")
+
+        where_clause = "WHERE {\n  GRAPH <" + graph_iri + "> {\n"
+        for part in where_parts:
+            where_clause += f"    {part}\n"
+        for filt in filters_list:
+            where_clause += f"    {filt}\n"
+        where_clause += "  }\n}"
+
+        delete_clause = "DELETE {\n  GRAPH <" + graph_iri + "> {\n"
+        for pattern in condition.patterns:
+            delete_clause += f"    {pattern.to_sparql()}\n"
+        delete_clause += "  }\n}"
+
+        return delete_clause, where_clause
+
+    async def _estimate_conditional_delete(self, graph_iri: str, where_clause: str, trace_id: str) -> "DryRunResult":
+        """估算条件删除的影响范围、样本与执行时间。"""
+
+        import time
+
+        start = time.perf_counter()
+        count_query = f"SELECT (COUNT(*) AS ?count)\n{where_clause}"
+        count_result = await self._client.select(count_query, trace_id=trace_id)
+        try:
+            count = int(count_result.get("bindings", [{}])[0].get("count", {}).get("value", 0))
+        except Exception:
+            count = 0
+
+        sample_query = f"SELECT *\n{where_clause}\nLIMIT 10"
+        sample_result = await self._client.select(sample_query, trace_id=trace_id)
+        samples = sample_result.get("bindings", [])
+
+        duration = (time.perf_counter() - start) * 1000.0
+        if count > 10:
+            duration *= (count / 10.0)
+
+        return DryRunResult(
+            graph_iri=graph_iri,
+            estimated_deletes=count,
+            sample_triples=samples,
+            execution_time_estimate_ms=duration,
+        )
 
     async def _count_matching(self, graph_iri: str, pattern: str, trace_id: str) -> int:
         """统计命名图中与指定模式匹配的三元组数量。
@@ -396,3 +582,56 @@ class NamedGraphManager:
         if graph.scenario_id:
             snapshot_iri = f"{snapshot_iri}:scenario:{graph.scenario_id}"
         return snapshot_id, snapshot_iri
+
+
+# ================= P0 条件清理：数据类型定义 ======================
+
+@dataclass(frozen=True, slots=True)
+class TriplePattern:
+    """三元组模式定义。
+
+    参数：
+        subject: 主语 token（可为变量如"?s"，或 IRI 形如"<http://...>"）；None 表示使用默认变量"?s"；
+        predicate: 谓词 token（同上）；None 表示使用默认变量"?p"；
+        object: 宾语 token（同上，允许字面量表达式如 '"text"'）；None 表示使用默认变量"?o"。
+
+    返回：
+        to_sparql(): 生成形如 "?s ?p ?o ." 的模式字符串（包含句点）。
+    """
+
+    subject: str | None = None
+    predicate: str | None = None
+    object: str | None = None
+
+    def to_sparql(self) -> str:
+        s = self.subject or "?s"
+        p = self.predicate or "?p"
+        o = self.object or "?o"
+        return f"{s} {p} {o} ."
+
+
+@dataclass
+class ClearCondition:
+    """条件清理定义。
+
+    参数：
+        patterns: 三元组模式列表；至少包含一个模式；
+        subject_prefix: 主语 IRI 的字符串前缀过滤（可选）；
+        predicate_whitelist: 谓词 IRI 白名单（可选）；
+        object_type: 宾语类型过滤，仅允许 "IRI" 或 "Literal"（可选）。
+    """
+
+    patterns: list[TriplePattern]
+    subject_prefix: str | None = None
+    predicate_whitelist: list[str] | None = None
+    object_type: str | None = None
+
+
+@dataclass
+class DryRunResult:
+    """Dry-Run 结果承载类型。"""
+
+    graph_iri: str
+    estimated_deletes: int
+    sample_triples: list[dict[str, Any]]
+    execution_time_estimate_ms: float
