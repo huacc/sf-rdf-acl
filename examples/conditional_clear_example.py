@@ -1,13 +1,7 @@
 """条件化清理示例
 
-该示例展示如何安全地按条件清理命名图中的部分数据，支持 Dry-Run 预估与执行阶段阈值保护。
-
-运行方式：
-    python examples/conditional_clear_example.py
-
-注意：
-    - 默认读取 sf-common 的配置（RDF 端点、数据集、命名图命名规则等）。
-    - 示例包含交互式确认；在自动化环境（如 CI）可直接调用 `run_example(dry_run=True)` 以跳过交互。
+演示如何按条件安全删除命名图中的部分数据，支持 Dry-Run 预估与执行阈值保护。
+运行方式: python examples/conditional_clear_example.py
 """
 from __future__ import annotations
 
@@ -25,18 +19,12 @@ from sf_rdf_acl.query.dsl import GraphRef
 async def run_example(settings: Settings, *, dry_run: bool = True) -> dict[str, Any]:
     """执行条件化清理示例。
 
-    参数：
-        settings (Settings): 全局配置对象。
-        dry_run (bool): 是否仅预估（不执行）。范围：True/False；默认 True。
-
-    返回：
-        dict[str, Any]: 当 dry_run=False 时返回执行结果；dry_run=True 时返回 Dry-Run 统计信息的字典化数据。
+    返回统一的字典结果，便于日志与测试断言。
     """
 
     manager = NamedGraphManager()
     graph = GraphRef(model="demo", version="v1", env="dev")
 
-    # 构造清理条件：删除 rdfs:comment 谓词的三元组，且仅针对特定前缀的主体
     condition = ClearCondition(
         patterns=[
             TriplePattern(predicate="<http://www.w3.org/2000/01/rdf-schema#comment>")
@@ -52,9 +40,7 @@ async def run_example(settings: Settings, *, dry_run: bool = True) -> dict[str, 
         max_deletes=1000,
     )
 
-    # 统一返回 dict 便于打印或测试断言
     if hasattr(result, "model_dump"):
-        # pydantic/dataclass 兼容处理
         try:
             return result.model_dump()  # type: ignore[attr-defined]
         except Exception:
@@ -68,18 +54,20 @@ async def run_example(settings: Settings, *, dry_run: bool = True) -> dict[str, 
 
 
 async def main() -> None:
-    """脚本入口：演示 dry-run 与交互式确认执行。"""
+    """脚本入口: 先 Dry-Run 预估，再询问是否执行。"""
 
-    ConfigManager.load()
+    ConfigManager.load(env=None, override_path=r"D:\coding\OntologyGraph\projects\sf-rdf-acl\examples\config\demo.yaml")
     settings = ConfigManager.current().settings
 
-    # 第一步：Dry-Run 预估
     print("Step 1: Dry-run to preview changes...")
     preview = await run_example(settings, dry_run=True)
     print(f"Will delete approximately {preview.get('estimated_deletes', 0)} triples")
 
-    # 第二步：交互确认后执行
-    confirm = input("\nProceed with deletion? (yes/no): ")
+    try:
+        confirm = input("\nProceed with deletion? (yes/no): ")
+    except EOFError:
+        print("No stdin available; skipping execution step.")
+        return
     if confirm.strip().lower() == "yes":
         print("\nStep 2: Executing conditional clear...")
         result = await run_example(settings, dry_run=False)

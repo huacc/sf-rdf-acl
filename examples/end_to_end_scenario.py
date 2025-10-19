@@ -31,9 +31,7 @@ from sf_rdf_acl import (
 )
 from sf_rdf_acl.transaction.upsert import Provenance
 from sf_rdf_acl.query.dsl import GraphRef
-
-from helpers import InMemoryFusekiClient, load_demo_config
-
+from helpers import build_fuseki_client, load_demo_config
 SF = "http://semanticforge.ai/ontologies/core#"
 RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
 PROV_GENERATED_AT = "http://www.w3.org/ns/prov#generatedAtTime"
@@ -47,7 +45,7 @@ async def main() -> None:
     settings = ConfigManager.current().settings
 
     # 2) 准备内存版 Fuseki 客户端，并为各个服务注入同一个客户端实例。
-    client = InMemoryFusekiClient()
+    client = build_fuseki_client()
     graph_ref = GraphRef(model="demo", version="v1", env="dev", scenario_id="quality")
     planner = UpsertPlanner(settings=settings)
     tx_manager = TransactionManager(planner=planner, client=client)
@@ -109,7 +107,7 @@ async def main() -> None:
         metadata={
             "operator": "质量管理员",
             "batch": "demo-20251018",
-            PROV_GENERATED_AT: occurred_at.isoformat(),
+            # generatedAtTime is added automatically by service
         },
     )
 
@@ -133,9 +131,16 @@ async def main() -> None:
     mapped_rows = mapper.map_bindings(raw_result["vars"], raw_result["bindings"])
 
     # 7) 导出命名图的 Turtle 片段，方便人工复核或下游集成。
-    ttl_snippet = client.export_graph_as_turtle(projection.graph_iri or "")
-    formatted_ttl = formatter.to_turtle(ttl_snippet)
-
+    construct_query = (
+        f"CONSTRUCT {{ ?s ?p ?o }} WHERE {{ GRAPH <{projection.graph_iri}> {{ ?s ?p ?o }} }}"
+    )
+    construct_res = await client.construct(construct_query, trace_id="demo-e2e-construct")
+    formatted_ttl = formatter.to_turtle(construct_res.get("turtle", ""))
+    construct_query = (
+        f"CONSTRUCT {{ ?s ?p ?o }} WHERE {{ GRAPH <{projection.graph_iri}> {{ ?s ?p ?o }} }}"
+    )
+    construct_res = await client.construct(construct_query, trace_id="demo-e2e-construct")
+    formatted_ttl = formatter.to_turtle(construct_res.get("turtle", ""))
     # 8) 生成一次快照，展示命名图管理能力（复制到新的 snapshot 图）。
     snapshot_info = await graph_manager.snapshot(graph_ref, trace_id="demo-e2e-snapshot")
 
@@ -156,3 +161,9 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+
+
+
+
+

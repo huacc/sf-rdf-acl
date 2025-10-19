@@ -229,6 +229,14 @@ class NamedGraphManager:
         def _wrap_subject(term: Any | None) -> str | None:
             if term is None:
                 return None
+            if isinstance(term, dict):
+                t = (term.get("type") or term.get("kind") or "").lower()
+                v = str(term.get("value", "")).strip()
+                if not v:
+                    return None
+                if t in {"iri", "uri"}:
+                    return v if v.startswith("<") else f"<{v}>"
+                raise ValueError("subject 仅支持 IRI/URI 类型")
             text = str(term).strip()
             if text.startswith("?") or text.startswith("<"):
                 return text
@@ -237,6 +245,14 @@ class NamedGraphManager:
         def _wrap_pred(term: Any | None) -> str | None:
             if term is None:
                 return None
+            if isinstance(term, dict):
+                t = (term.get("type") or term.get("kind") or "").lower()
+                v = str(term.get("value", "")).strip()
+                if not v:
+                    return None
+                if t in {"iri", "uri"}:
+                    return v if v.startswith("<") or ":" in v else f"<{v}>"
+                raise ValueError("predicate 仅支持 IRI/URI 类型")
             text = str(term).strip()
             if text.startswith("?") or text.startswith("<") or ":" in text:
                 return text

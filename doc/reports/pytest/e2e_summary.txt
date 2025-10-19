@@ -1,0 +1,13 @@
+tests/test_rdf_end_to_end.py::test_upsert_and_projection_roundtrip PASSED [  6%]
+tests/test_rdf_end_to_end.py::test_snapshot_and_conditional_clear PASSED [  7%]
+tests/test_rdf_end_to_end.py::test_provenance_annotation PASSED          [  8%]
+tests/test_rdf_end_to_end.py::test_snapshot_and_conditional_clear
+15.57s call     tests/test_rdf_end_to_end.py::test_snapshot_and_conditional_clear
+10.52s call     tests/test_rdf_end_to_end.py::test_upsert_and_projection_roundtrip
+7.37s setup    tests/test_rdf_end_to_end.py::test_snapshot_and_conditional_clear
+6.52s call     tests/test_rdf_end_to_end.py::test_provenance_annotation
+6.03s setup    tests/test_rdf_end_to_end.py::test_upsert_and_projection_roundtrip
+5.93s setup    tests/test_rdf_end_to_end.py::test_provenance_annotation
+4.93s teardown tests/test_rdf_end_to_end.py::test_snapshot_and_conditional_clear
+1.15s teardown tests/test_rdf_end_to_end.py::test_upsert_and_projection_roundtrip
+1.14s teardown tests/test_rdf_end_to_end.py::test_provenance_annotation

@@ -266,7 +266,18 @@ class InMemoryFusekiClient:
 
         if upper.startswith("COPY GRAPH"):
             source, target = _extract_two_graphs(statement)
-            self._graphs[target] = [TripleRecord(**record.__dict__) for record in self._graphs[source]]
+            # dataclass(slots=True) 没有 __dict__，显式复制字段
+            self._graphs[target] = [
+                TripleRecord(
+                    subject=record.subject,
+                    predicate=record.predicate,
+                    obj_value=record.obj_value,
+                    obj_type=record.obj_type,
+                    datatype=record.datatype,
+                    lang=record.lang,
+                )
+                for record in self._graphs[source]
+            ]
             self._types[target] = defaultdict(set)
             for entity, values in self._types[source].items():
                 self._types[target][entity].update(values)
