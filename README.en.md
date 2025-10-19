@@ -1,63 +1,63 @@
-[English](README.en.md) | 中文
+[English](README.en.md) | [中文](README.md)
 
-SF-RDF-ACL（RDF Anti-Corruption Layer）
-=====================================
+SF-RDF-ACL (RDF Anti-Corruption Layer)
+======================================
 
-SF-RDF-ACL 是 SemanticForge 平台的 RDF 反腐层（library）。面向上层 API、算法与业务服务，提供一致、可观测、可扩展的 RDF 访问能力：Fuseki 连接与熔断重试、查询 DSL 与 SPARQL 构建、命名图管理、事务式 Upsert、批处理、图投影、结果转换与 RDF* 溯源写入等。
+SF-RDF-ACL is the RDF Anti-Corruption Layer for the SemanticForge platform. It offers a consistent, observable, and extensible way to interact with RDF stores (Jena Fuseki): robust HTTP client with retries/circuit breaking, a query DSL with SPARQL builders, named graph management, transactional upsert, batch ingestion, graph projection, result conversion, and RDF* provenance writing.
 
-特性一览
---------
-
-- 稳健连接：超时控制、指数退避重试、熔断器、trace 透传与指标上报（`FusekiClient`）
-- 查询构建：结构化 DSL 到 SELECT/CONSTRUCT，游标分页（`QueryDSL`、`SPARQLQueryBuilder`、`CursorPagination`）
-- 命名图管理：创建、清空、条件删除、合并与快照（`NamedGraphManager`）
-- 事务 Upsert：s / s+p / 自定义键分组，replace/ignore/append 策略，冲突检测与可回滚（`UpsertPlanner`、`TransactionManager`）
-- 批处理写入：模板化 INSERT DATA，分批与单条自动重试（`BatchOperator`）
-- 图投影：GraphJSON 与边列表输出，适配可视化与图算法（`GraphProjectionBuilder`）
-- 结果转换：CONSTRUCT/Turtle → JSON-LD/简化 JSON；SELECT 绑定结果标准化（`GraphFormatter`、`ResultMapper`）
-- 溯源写入：RDF* 断言与业务元数据注入（`ProvenanceService`）
-
-目录结构
---------
-
-- `src/sf_rdf_acl/` 核心库代码（connection、query、transaction、graph、converter、provenance、utils）
-- `docs/` Sphinx 文档（指南、示例、API 参考）
-- `tests/` 单元与集成测试
-- `examples/` 可直接运行的示例脚本
-- `pyproject.toml` 构建与依赖配置（Python ≥ 3.12）
-
-环境要求
---------
-
-- Python 3.12+
-- Jena Fuseki 4.x（兼容标准 HTTP/SPARQL 接口）
-- 可选：PostgreSQL（启用审计 `AuditLogger` 时）
-
-安装与开发
+Highlights
 ----------
 
-本地开发（推荐可编辑安装）：
+- Resilient client: timeouts, exponential backoff retries, circuit breaker, trace propagation, metrics (`FusekiClient`)
+- Query building: structured DSL to SELECT/CONSTRUCT, cursor-based pagination (`QueryDSL`, `SPARQLQueryBuilder`, `CursorPagination`)
+- Named graph ops: create, clear, conditional delete, merge, snapshot (`NamedGraphManager`)
+- Transactional upsert: s / s+p / custom keys; replace/ignore/append strategies; conflict check and rollback (`UpsertPlanner`, `TransactionManager`)
+- Batch ingestion: template-based INSERT DATA, chunking and per-item retries (`BatchOperator`)
+- Graph projection: GraphJSON and edge list for visualization/analytics (`GraphProjectionBuilder`)
+- Result conversion: CONSTRUCT/Turtle → JSON-LD/simplified JSON; SELECT bindings normalization (`GraphFormatter`, `ResultMapper`)
+- Provenance: RDF* assertions with domain metadata (`ProvenanceService`)
+
+Directory Layout
+----------------
+
+- `src/sf_rdf_acl/` core library modules (connection, query, transaction, graph, converter, provenance, utils)
+- `docs/` Sphinx docs (guides, examples, API reference)
+- `tests/` unit/integration tests
+- `examples/` runnable scripts
+- `pyproject.toml` build and dependencies (Python ≥ 3.12)
+
+Requirements
+------------
+
+- Python 3.12+
+- Jena Fuseki 4.x (standard HTTP/SPARQL)
+- Optional: PostgreSQL (if enabling `AuditLogger`)
+
+Install & Develop
+-----------------
+
+Editable install for local development:
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -U pip
 .\.venv\Scripts\pip install -e .
 
-# 若同时开发 sf-common，可并行安装
+# If you also develop sf-common side-by-side
 # .\.venv\Scripts\pip install -e ..\sf-common
 ```
 
-运行测试：
+Run tests:
 
 ```powershell
 .\.venv\Scripts\pip install pytest pytest-cov pytest-asyncio
 .\.venv\Scripts\python -m pytest -q
 ```
 
-快速开始（代码示例）
-------------------
+Quickstart (Code)
+-----------------
 
-1) 连接与查询
+1) Connect and query
 
 ```python
 from sf_rdf_acl.connection.client import FusekiClient
@@ -70,25 +70,25 @@ graph = await client.construct("CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o } LIMIT 
 print(graph["turtle"][:200])
 ```
 
-2) DSL 构建与分页
+2) DSL + pagination
 
 ```python
 from sf_rdf_acl.query.dsl import QueryDSL, Filter
 from sf_rdf_acl.query.builder import SPARQLQueryBuilder
 from sf_rdf_acl.query.pagination import CursorPage, CursorPagination
 
-dsl = QueryDSL(type="raw", filters=[Filter(field="rdfs:label", operator="contains", value="示例")])
+dsl = QueryDSL(type="raw", filters=[Filter(field="rdfs:label", operator="contains", value="demo")])
 sparql = SPARQLQueryBuilder().build_select(dsl)
 
 page1 = CursorPage(cursor=None, size=100)
 q1 = SPARQLQueryBuilder().build_select_with_cursor(dsl, page1, sort_key="?s")
-# 执行 q1 后拿到最后一条，生成下一页游标
+# Build next page cursor from last item
 cursor = CursorPagination.encode_cursor({"s": {"type": "uri", "value": "http://ex/e/100"}}, sort_key="?s")
 page2 = CursorPage(cursor=cursor, size=100)
 q2 = SPARQLQueryBuilder().build_select_with_cursor(dsl, page2, sort_key="?s")
 ```
 
-3) 命名图管理
+3) Named graph management
 
 ```python
 from sf_rdf_acl.graph.named_graph import NamedGraphManager
@@ -100,7 +100,7 @@ await mgr.clear(GraphRef(model="demo", version="v1", env="dev"), trace_id="t-cle
 snap = await mgr.snapshot(GraphRef(model="demo", version="v1", env="dev"), trace_id="t-snap")
 ```
 
-4) 事务 Upsert
+4) Transactional upsert
 
 ```python
 from sf_rdf_acl.transaction.manager import TransactionManager
@@ -110,7 +110,7 @@ from sf_rdf_acl.query.dsl import GraphRef
 mgr = TransactionManager()
 req = UpsertRequest(
     graph=GraphRef(model="demo", version="v1", env="dev"),
-    triples=[Triple(s="<http://ex/e/1>", p="rdfs:label", o="示例", lang="zh")],
+    triples=[Triple(s="<http://ex/e/1>", p="rdfs:label", o="Demo")],
     upsert_key="s+p",
     merge_strategy="ignore",
 )
@@ -118,7 +118,7 @@ summary = await mgr.upsert(req, trace_id="t-upsert", actor="alice")
 print(summary)
 ```
 
-5) 图投影与结果转换
+5) Graph projection & conversion
 
 ```python
 from sf_rdf_acl.graph.projection import GraphProjectionBuilder
@@ -134,7 +134,7 @@ jsonld = formatter.format_graph((await client.construct("CONSTRUCT { ?s ?p ?o } 
                                 context={"sf": "http://semanticforge.ai/ontologies/core#"})
 ```
 
-6) RDF* 溯源写入
+6) RDF* provenance
 
 ```python
 from sf_rdf_acl.provenance.provenance import ProvenanceService
@@ -144,17 +144,17 @@ from sf_rdf_acl.query.dsl import GraphRef
 svc = ProvenanceService()
 triples = [
     Triple(s="<http://ex/e/1>", p="rdf:type", o="sf:Entity"),
-    Triple(s="<http://ex/e/1>", p="rdfs:label", o="示例", lang="zh"),
+    Triple(s="<http://ex/e/1>", p="rdfs:label", o="Demo"),
 ]
 prov = Provenance(evidence="import", confidence=0.98, source="http://job/123")
 result = await svc.annotate(GraphRef(model="demo", version="v1", env="dev"), triples, prov, trace_id="t-prov")
 print(result["count"])
 ```
 
-配置（Settings）
----------------
+Settings
+--------
 
-库默认通过 `common.config.ConfigManager` 读取平台配置（YAML/环境变量）。典型字段：
+Default configuration is read via `common.config.ConfigManager` (YAML/env). Typical fields:
 
 ```yaml
 rdf:
@@ -171,33 +171,32 @@ graph:
     default: { limit: 1000, includeLiterals: false, directed: true, edgePredicates: ["rdf:type"] }
 ```
 
-文档与示例
-----------
+Docs & Examples
+---------------
 
-- 指南与示例：`docs/guides/*`、`docs/examples/*`
-- API 参考：`docs/api/*`（Sphinx 自动与手工补充混合）
-- 本地构建文档：
+- Guides & examples: `docs/guides/*`, `docs/examples/*`
+- API reference: `docs/api/*` (Sphinx autodoc + hand-written)
+- Build docs locally:
 
 ```powershell
-# 若已安装 sphinx
 sphinx-build -b html docs _build/html
 ```
 
-测试与质量
-----------
+Testing & Quality
+-----------------
 
-- 测试：`pytest -q`
-- 建议：Conventional Commits，PEP8/Black/Flake8/MyPy（按平台统一规范）
+- Tests: `pytest -q`
+- Conventions: Conventional Commits; PEP8/Black/Flake8/MyPy (as configured)
 
-许可与合规
-----------
+License & Compliance
+--------------------
 
-- License：Proprietary（见 `pyproject.toml`）
-- 存储与安全：不在仓库提交密钥；支持 trace id 透传；错误码与异常统一于 `common.exceptions`
+- License: Proprietary (see `pyproject.toml`)
+- Security: never commit secrets; trace propagation supported; unified error codes in `common.exceptions`
 
-反馈与贡献
-----------
+Contributing
+------------
 
-- Issue / PR：欢迎基于小步变更提交，附带动机、影响范围与验证方法
-- 代码与文档变更建议一并附测试或示例
+- Issues/PRs are welcome. Please include intent, impact scope, and validation notes.
+- For code/doc changes, include tests or runnable snippets where reasonable.
 
