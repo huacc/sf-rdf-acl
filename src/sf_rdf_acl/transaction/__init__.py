@@ -6,6 +6,11 @@ from sf_rdf_acl.transaction.upsert import (
     UpsertStatement,
     Triple,
 )
+from sf_rdf_acl.transaction.batch import (
+    BatchOperator,
+    BatchTemplate,
+    BatchResult,
+)
 
 __all__ = [
     "TransactionManager",
@@ -14,6 +19,9 @@ __all__ = [
     "UpsertPlan",
     "UpsertStatement",
     "Triple",
+    "BatchOperator",
+    "BatchTemplate",
+    "BatchResult",
 ]
 
 
