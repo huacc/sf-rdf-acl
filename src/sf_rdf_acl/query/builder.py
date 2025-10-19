@@ -153,6 +153,73 @@ class SPARQLQueryBuilder:
 
         return self._build_query(dsl, graph=graph, construct=True)
 
+    # -------------------- 游标分页 SELECT --------------------
+
+    def build_select_with_cursor(
+        self,
+        dsl: QueryDSL,
+        cursor_page: "CursorPage",
+        sort_key: str = "?s",
+        *,
+        graph: str | None = None,
+    ) -> str:
+        """基于游标分页生成 SELECT 查询。
+
+        参数:
+            dsl: 查询 DSL，参与构建 WHERE 的过滤、展开、时间窗等内容。
+            cursor_page: 分页参数，包含上页游标与每页大小。
+            sort_key: 排序与游标比较的变量名，默认为 "?s"（主语）。
+            graph: 可选的命名图 IRI；None 表示默认图。
+
+        返回:
+            str: 可直接发送至 Fuseki 的 SPARQL 查询文本。
+        """
+
+        # 延迟导入，避免循环依赖
+        from .pagination import CursorPagination
+
+        prefixes = self._merge_prefixes(dsl)
+
+        # 构造 WHERE 内容：复用 _build_query 的分解逻辑
+        where_lines: list[str] = ["?s ?p ?o ."]
+        select_vars: list[str] = ["?s", "?p", "?o"]
+        next_index = 0
+
+        for item in dsl.filters:
+            var_name = f"?f{next_index}"
+            next_index += 1
+            triple_parts, filter_parts = self._render_filter(item, var_name, prefixes)
+            where_lines.extend(triple_parts)
+            where_lines.extend(filter_parts)
+
+        expand_clauses = self._render_expand(dsl.expand, prefixes, start=next_index)
+        select_vars.extend(expand_clauses.keys())
+        where_lines.extend(expand_clauses.values())
+        next_index += len(expand_clauses)
+
+        if dsl.participants:
+            participant_clauses = self._render_participants(dsl.participants, prefixes, start=next_index)
+            select_vars.extend(participant_clauses.keys())
+            where_lines.extend(participant_clauses.values())
+            next_index += len(participant_clauses)
+
+        if dsl.time_window:
+            where_lines.append(self._render_time_window(prefixes))
+            where_lines.extend(self._render_time_filters(dsl.time_window))
+
+        # 游标过滤
+        if cursor_page.cursor:
+            data = CursorPagination.decode_cursor(cursor_page.cursor)
+            where_lines.append(CursorPagination.build_cursor_filter(data, sort_key))
+
+        body = self._wrap_graph(where_lines, graph)
+        header = self._render_prefix_block(prefixes)
+
+        parts: list[str] = [header, "SELECT DISTINCT ?s", "WHERE {", body, "}"]
+        parts.append(f"ORDER BY {sort_key}")
+        parts.append(f"LIMIT {max(1, cursor_page.size) + 1}")  # 多取 1 条用于判断 has_more
+        return "\n".join(parts)
+
     # ---- 内部实现 -----------------------------------------------------
 
     def _build_query(self, dsl: QueryDSL, *, graph: str | None, construct: bool) -> str:
