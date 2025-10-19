@@ -110,21 +110,4 @@ SPARQLSanitizer（辅助）
    q2 = SPARQLQueryBuilder().build_select_with_cursor(QueryDSL(type="raw"), page2, sort_key="?s")
 
 
-自动文档（参考）
-----------------
-
-.. automodule:: sf_rdf_acl.query.dsl
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-.. automodule:: sf_rdf_acl.query.builder
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-.. automodule:: sf_rdf_acl.query.pagination
-   :members:
-   :undoc-members:
-   :show-inheritance:
 
